@@ -1,9 +1,8 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Clock, CheckCircle, XCircle, RotateCw, Volume2 } from 'lucide-react';
-import HCaptcha from '@hcaptcha/react-hcaptcha';
-import textBased1 from './images/textBased1.png';
-import textBased2 from './images/textBased2.png';
-import textBased3 from './images/textBased3.png';
+import textBased1 from './images/text/textBased1.png';
+import textBased2 from './images/text/textBased2.png';
+import textBased3 from './images/text/textBased3.png';
 
 const GROUP_ORDERS = {
   IPT: ['Image', 'Puzzle', 'Text'],
@@ -11,13 +10,44 @@ const GROUP_ORDERS = {
   PTI: ['Puzzle', 'Text', 'Image']
 };
 
-const HCAPTCHA_SITE_KEY = process.env.REACT_APP_HCAPTCHA_SITE_KEY;
-
 const TEXT_CAPTCHAS = [
   { id: 1, answer: '6T9JBCDS', imageUrl: textBased1 },
   { id: 2, answer: '831632', imageUrl: textBased2 },
   { id: 3, answer: 'KM8CXKZ8t', imageUrl: textBased3 },
 ];
+
+const exportToCSV = (participantId, group, results) => {
+  const csvRows = [];
+  
+  // Header
+  csvRows.push('ParticipantID,Group,CAPTCHAType,Trial,SolveTime_sec,ErrorRate,Attempts');
+  
+  // Data rows
+  results.forEach((result, roundIdx) => {
+    for (let trial = 1; trial <= 3; trial++) {
+      const row = [
+        participantId,
+        group,
+        result.type,
+        trial,
+        (result.time / 1000 / 3).toFixed(3), // Average time per trial
+        result.attempts || 0, // Total errors for this round
+        result.attempts || 0  // Attempts count
+      ];
+      csvRows.push(row.join(','));
+    }
+  });
+  
+  // Create and download CSV
+  const csvContent = csvRows.join('\n');
+  const blob = new Blob([csvContent], { type: 'text/csv' });
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `captcha_study_${participantId}_${group}_${new Date().getTime()}.csv`;
+  a.click();
+  window.URL.revokeObjectURL(url);
+};
 
 // Slider Puzzle CAPTCHA
 const generateSliderPuzzle = () => {
@@ -25,18 +55,13 @@ const generateSliderPuzzle = () => {
   return { targetPosition, tolerance: 5 };
 };
 
-// Rotation Puzzle CAPTCHA  
-const PUZZLE_IMAGES = ['🎨', '🎭', '🎪', '🎡', '🎢', '🎠', '🎰', '🎲', '🎯'];
-
-const generateRotationPuzzle = () => {
-  const image = PUZZLE_IMAGES[Math.floor(Math.random() * PUZZLE_IMAGES.length)];
-  const rotation = [90, 180, 270][Math.floor(Math.random() * 3)];
-  return { image, rotation };
-};
-
 // Text CAPTCHA Component
 const TextCaptcha = ({ captchaData, onSubmit, error, trial }) => {
   const [input, setInput] = useState('');
+  
+  useEffect(() => {
+    setInput('');
+  }, [captchaData]);
   
   const handleSubmit = () => {
     if (!input.trim()) return;
@@ -96,64 +121,151 @@ const TextCaptcha = ({ captchaData, onSubmit, error, trial }) => {
   );
 };
 
-// image
+// Custom Image Grid CAPTCHA
 const ImageCaptcha = ({ onSubmit, error, trial }) => {
-  const hcaptchaRef = useRef(null);
-  const [startTime] = useState(Date.now());
+  const [selected, setSelected] = useState(new Set());
+  const [challenge, setChallenge] = useState(null);
 
-  const handleVerify = (token) => {
-    if (token) {
-      const solveTime = Date.now() - startTime;
-      onSubmit(true, solveTime);
-      if (hcaptchaRef.current) {
-        hcaptchaRef.current.resetCaptcha();
+  // Challenge configurations
+  const challenges = [
+    { name: 'cars', label: 'cars', correctCount: 3, wrongCount: 6 },
+    { name: 'crosswalk', label: 'crosswalks', correctCount: 2, wrongCount: 7 },
+    { name: 'stairs', label: 'stairs', correctCount: 3, wrongCount: 6 }
+  ];
+
+  // Initialize challenge on mount
+  useEffect(() => {
+    const challengeType = challenges[trial % challenges.length];
+    const images = [];
+    
+    try {
+      // Load correct images
+      for (let i = 1; i <= challengeType.correctCount; i++) {
+        images.push({
+          src: require(`./images/image/${challengeType.name}/right-${i}.png`),
+          isCorrect: true,
+          id: `right-${i}`
+        });
       }
+      
+      // Load wrong images
+      for (let i = 1; i <= challengeType.wrongCount; i++) {
+        images.push({
+          src: require(`./images/image/${challengeType.name}/wrong-${i}.png`),
+          isCorrect: false,
+          id: `wrong-${i}`
+        });
+      }
+      
+      // Shuffle images
+      const shuffled = images.sort(() => Math.random() - 0.5);
+      
+      setChallenge({
+        type: challengeType,
+        images: shuffled
+      });
+    } catch (err) {
+      console.error('Error loading images:', err);
+    }
+  }, [trial]);
+
+  const handleImageClick = (index) => {
+    const newSelected = new Set(selected);
+    if (newSelected.has(index)) {
+      newSelected.delete(index);
+    } else {
+      newSelected.add(index);
+    }
+    setSelected(newSelected);
+  };
+
+  const handleVerify = () => {
+    if (!challenge) return;
+    
+    // Check if all selected images are correct
+    const selectedImages = Array.from(selected).map(idx => challenge.images[idx]);
+    const correctImages = challenge.images.filter(img => img.isCorrect);
+    
+    // Must select exactly the correct images
+    const allCorrectSelected = correctImages.every((img) => {
+      const imageIndex = challenge.images.indexOf(img);
+      return selected.has(imageIndex);
+    });
+    
+    const noIncorrectSelected = selectedImages.every(img => img.isCorrect);
+    const correctCount = selectedImages.filter(img => img.isCorrect).length;
+    
+    const isCorrect = allCorrectSelected && noIncorrectSelected && correctCount === correctImages.length;
+    
+    onSubmit(isCorrect);
+    if (!isCorrect) {
+      setSelected(new Set());
     }
   };
 
-  const handleExpire = () => {
-    onSubmit(false);
-  };
-
-  const handleError = () => {
-    onSubmit(false);
-  };
+  if (!challenge) return <div>Loading...</div>;
 
   return (
     <div className="space-y-4">
-      <div className="border-2 border-gray-300 rounded-lg p-6 bg-white shadow-sm">
-        <div className="mb-4">
-          <h3 className="text-lg font-semibold text-gray-800 mb-2">Image Selection Challenge</h3>
-          <p className="text-sm text-gray-600">
-            Complete the hCaptcha challenge below
-          </p>
+      <div className="border-2 border-gray-300 rounded-lg overflow-hidden bg-white shadow-sm">
+        <div className="bg-blue-500 text-white p-4">
+          <h3 className="text-lg font-semibold">Select all images with</h3>
+          <p className="text-2xl font-bold">{challenge.type.label}</p>
+          <p className="text-sm mt-1">Click verify once there are none left.</p>
         </div>
 
-        <div className="flex justify-center">
-          <HCaptcha
-            ref={hcaptchaRef}
-            sitekey={HCAPTCHA_SITE_KEY}
-            onVerify={handleVerify}
-            onExpire={handleExpire}
-            onError={handleError}
-          />
-        </div>
-
-        {error && (
-          <div className="mt-4 p-3 bg-red-50 border border-red-300 rounded text-red-700 text-sm flex items-center gap-2">
-            <XCircle className="w-4 h-4" />
-            Challenge expired or failed. Please try again.
+        <div className="p-4">
+          <div className="grid grid-cols-3 gap-2 mb-4">
+            {challenge.images.map((image, idx) => (
+              <button
+                key={idx}
+                onClick={() => handleImageClick(idx)}
+                className={`aspect-square overflow-hidden border-4 transition-all ${
+                  selected.has(idx) 
+                    ? 'border-blue-500 opacity-75' 
+                    : 'border-gray-300 hover:border-gray-400'
+                }`}
+              >
+                <img 
+                  src={image.src} 
+                  alt={`Option ${idx + 1}`}
+                  className="w-full h-full object-cover"
+                />
+              </button>
+            ))}
           </div>
-        )}
+
+          {error && (
+            <div className="mb-4 p-3 bg-red-50 border border-red-300 rounded text-red-700 text-sm flex items-center gap-2">
+              <XCircle className="w-4 h-4" />
+              Incorrect selection. Please try again.
+            </div>
+          )}
+
+          <div className="flex gap-3">
+            <button
+              onClick={() => setSelected(new Set())}
+              className="flex-1 bg-gray-200 text-gray-700 p-3 rounded-lg font-semibold hover:bg-gray-300 transition"
+            >
+              <RotateCw className="w-4 h-4 inline mr-2" />
+              Clear
+            </button>
+            <button
+              onClick={handleVerify}
+              className="flex-1 bg-blue-600 text-white p-3 rounded-lg font-semibold hover:bg-blue-700 transition"
+            >
+              Verify
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );
 };
 
-// puzzle
-const PuzzleCaptcha = ({ puzzleType, puzzleData, onSubmit, error, trial }) => {
+// puzzle - ONLY SLIDER
+const PuzzleCaptcha = ({ puzzleData, onSubmit, error, trial }) => {
   const [sliderValue, setSliderValue] = useState(0);
-  const [rotation, setRotation] = useState(puzzleData.rotation || 0);
 
   const handleSliderSubmit = () => {
     const diff = Math.abs(sliderValue - puzzleData.targetPosition);
@@ -162,115 +274,60 @@ const PuzzleCaptcha = ({ puzzleType, puzzleData, onSubmit, error, trial }) => {
     if (!isCorrect) setSliderValue(0);
   };
 
-  const handleRotationSubmit = () => {
-    const isCorrect = rotation === 0;
-    onSubmit(isCorrect);
-  };
-
-  const rotateImage = () => {
-    setRotation((prev) => (prev - 90 + 360) % 360);
-  };
-
-  if (puzzleType === 'slider') {
-    return (
-      <div className="space-y-4">
-        <div className="border-2 border-gray-300 rounded-lg p-6 bg-white shadow-sm">
-          <h3 className="text-lg font-semibold text-gray-800 mb-4">Slider Puzzle</h3>
-          <p className="text-sm text-gray-600 mb-6">
-            Drag the slider to align the puzzle piece with the target position
-          </p>
-
-          <div className="relative bg-gradient-to-r from-blue-100 to-purple-100 h-40 rounded-lg border-2 border-gray-300 mb-4 overflow-hidden">
-            {/* Target indicator */}
-            <div 
-              className="absolute top-0 bottom-0 w-1 bg-red-500"
-              style={{ left: `${puzzleData.targetPosition}%` }}
-            />
-            <div 
-              className="absolute top-1/2 -translate-y-1/2 text-xs bg-red-500 text-white px-2 py-1 rounded"
-              style={{ left: `${puzzleData.targetPosition}%`, transform: 'translateX(-50%) translateY(-50%)' }}
-            >
-              Target
-            </div>
-
-            {/* Slider piece */}
-            <div 
-              className="absolute top-1/2 -translate-y-1/2 w-16 h-16 bg-blue-600 rounded-lg shadow-lg flex items-center justify-center text-white font-bold text-2xl transition-all"
-              style={{ left: `${sliderValue}%`, transform: 'translateX(-50%) translateY(-50%)' }}
-            >
-              🧩
-            </div>
-          </div>
-
-          <input
-            type="range"
-            min="0"
-            max="100"
-            value={sliderValue}
-            onChange={(e) => setSliderValue(Number(e.target.value))}
-            className="w-full h-3 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-          />
-          
-          <div className="text-center text-sm text-gray-600 mt-2">
-            Position: {sliderValue}%
-          </div>
-
-          {error && (
-            <div className="mt-4 p-3 bg-red-50 border border-red-300 rounded text-red-700 text-sm flex items-center gap-2">
-              <XCircle className="w-4 h-4" />
-              Not quite right. Try to get closer to the target!
-            </div>
-          )}
-        </div>
-        
-        <button 
-          onClick={handleSliderSubmit}
-          className="w-full bg-blue-600 text-white p-3 rounded-lg font-semibold hover:bg-blue-700 transition"
-        >
-          Verify Position
-        </button>
-      </div>
-    );
-  }
-
-  // rotation
   return (
     <div className="space-y-4">
       <div className="border-2 border-gray-300 rounded-lg p-6 bg-white shadow-sm">
-        <h3 className="text-lg font-semibold text-gray-800 mb-4">Rotation Puzzle</h3>
+        <h3 className="text-lg font-semibold text-gray-800 mb-4">Slider Puzzle</h3>
         <p className="text-sm text-gray-600 mb-6">
-          Click the image to rotate it until it's upright
+          Drag the slider to align the puzzle piece with the target position
         </p>
 
-        <div 
-          className="bg-gray-100 rounded-lg p-12 flex items-center justify-center cursor-pointer hover:bg-gray-200 transition border-2 border-gray-300"
-          onClick={rotateImage}
-        >
+        <div className="relative bg-gradient-to-r from-blue-100 to-purple-100 h-40 rounded-lg border-2 border-gray-300 mb-4 overflow-hidden">
           <div 
-            className="text-9xl transition-transform duration-300"
-            style={{ transform: `rotate(${rotation}deg)` }}
+            className="absolute top-0 bottom-0 w-1 bg-red-500"
+            style={{ left: `${puzzleData.targetPosition}%` }}
+          />
+          <div 
+            className="absolute top-1/2 -translate-y-1/2 text-xs bg-red-500 text-white px-2 py-1 rounded"
+            style={{ left: `${puzzleData.targetPosition}%`, transform: 'translateX(-50%) translateY(-50%)' }}
           >
-            {puzzleData.image}
+            Target
+          </div>
+
+          <div 
+            className="absolute top-1/2 -translate-y-1/2 w-16 h-16 bg-blue-600 rounded-lg shadow-lg flex items-center justify-center text-white font-bold text-2xl transition-all"
+            style={{ left: `${sliderValue}%`, transform: 'translateX(-50%) translateY(-50%)' }}
+          >
+            🧩
           </div>
         </div>
 
-        <div className="text-center text-sm text-gray-600 mt-4">
-          Current rotation: {rotation}° • Click to rotate counter-clockwise
+        <input
+          type="range"
+          min="0"
+          max="100"
+          value={sliderValue}
+          onChange={(e) => setSliderValue(Number(e.target.value))}
+          className="w-full h-3 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+        />
+        
+        <div className="text-center text-sm text-gray-600 mt-2">
+          Position: {sliderValue}%
         </div>
 
         {error && (
           <div className="mt-4 p-3 bg-red-50 border border-red-300 rounded text-red-700 text-sm flex items-center gap-2">
             <XCircle className="w-4 h-4" />
-            Keep rotating until the image is upright!
+            Not quite right. Try to get closer to the target!
           </div>
         )}
       </div>
       
       <button 
-        onClick={handleRotationSubmit}
+        onClick={handleSliderSubmit}
         className="w-full bg-blue-600 text-white p-3 rounded-lg font-semibold hover:bg-blue-700 transition"
       >
-        Verify Rotation
+        Verify Position
       </button>
     </div>
   );
@@ -293,14 +350,10 @@ export default function CaptchaExperiment() {
 
   const generateCaptchaData = (type, trialNum) => {
     if (type === 'Text') {
-      // Use sequential text CAPTCHAs based on round and trial
       const index = currentRound * 3 + trialNum;
       return TEXT_CAPTCHAS[index % TEXT_CAPTCHAS.length];
     } else if (type === 'Puzzle') {
-      // Alternate between slider and rotation
-      return trialNum % 2 === 0 
-        ? { type: 'slider', data: generateSliderPuzzle() }
-        : { type: 'rotation', data: generateRotationPuzzle() };
+      return { type: 'slider', data: generateSliderPuzzle() };
     }
     return null;
   };
@@ -393,7 +446,7 @@ export default function CaptchaExperiment() {
           
           <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
             <p className="text-sm text-blue-800">
-              <strong>Study Design:</strong> Text CAPTCHAs use hardcoded images, Image CAPTCHAs use hCaptcha, and Puzzle CAPTCHAs are custom-designed challenges.
+              <strong>Study Design:</strong> Text CAPTCHAs use hardcoded images, Image CAPTCHAs use custom image grids, and Puzzle CAPTCHAs are slider challenges.
             </p>
           </div>
 
@@ -500,6 +553,23 @@ export default function CaptchaExperiment() {
               </div>
             </div>
 
+            {/* GoStats Export Section */}
+            <div className="bg-green-50 border-2 border-green-300 rounded-lg p-6">
+              <h2 className="text-xl font-semibold mb-3 text-green-800">📊 Export for GoStats Analysis</h2>
+              <p className="text-sm text-gray-700 mb-4">
+                Download CSV file formatted for ANOVA analysis in GoStats
+              </p>
+              <button
+                onClick={() => exportToCSV(participantId, group, results)}
+                className="w-full bg-green-600 text-white p-4 rounded-lg text-lg font-semibold hover:bg-green-700 transition flex items-center justify-center gap-2"
+              >
+                📥 Download CSV for GoStats
+              </button>
+              <p className="text-xs text-gray-500 mt-3">
+                Format: ParticipantID, Group, CAPTCHAType, Trial, SolveTime_sec, ErrorRate, Attempts
+              </p>
+            </div>
+
             <button
               onClick={resetExperiment}
               className="w-full bg-blue-600 text-white p-4 rounded-lg text-lg font-semibold hover:bg-blue-700 transition"
@@ -556,6 +626,7 @@ export default function CaptchaExperiment() {
 
           {currentType === 'Image' && (
             <ImageCaptcha
+              key={`image-${currentRound}-${currentTrial}`}
               onSubmit={handleCaptchaComplete}
               error={error}
               trial={currentTrial}
@@ -564,7 +635,7 @@ export default function CaptchaExperiment() {
 
           {currentType === 'Puzzle' && currentCaptchaData && (
             <PuzzleCaptcha
-              puzzleType={currentCaptchaData.type}
+              key={`puzzle-${currentRound}-${currentTrial}`}
               puzzleData={currentCaptchaData.data}
               onSubmit={handleCaptchaComplete}
               error={error}

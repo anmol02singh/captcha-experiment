@@ -19,26 +19,22 @@ const TEXT_CAPTCHAS = [
 const exportToCSV = (participantId, group, results) => {
   const csvRows = [];
   
-  // Header
-  csvRows.push('ParticipantID,Group,CAPTCHAType,Trial,SolveTime_sec,ErrorRate,Attempts');
+  // Header (long format: one row per trial)
+  csvRows.push('ParticipantID,Group,CAPTCHAType,Round,Trial,SolveTime_sec,ErrorCount');
   
-  // Data rows
-  results.forEach((result, roundIdx) => {
-    for (let trial = 1; trial <= 3; trial++) {
-      const row = [
-        participantId,
-        group,
-        result.type,
-        trial,
-        (result.time / 1000 / 3).toFixed(3), // Average time per trial
-        result.attempts || 0, // Total errors for this round
-        result.attempts || 0  // Attempts count
-      ];
-      csvRows.push(row.join(','));
-    }
+  results.forEach((result) => {
+    const row = [
+      participantId,
+      group,
+      result.type,
+      result.round,       // 1–3
+      result.trial,       // 1–3
+      (result.time / 1000).toFixed(3),  // ms → s
+      result.attempts
+    ];
+    csvRows.push(row.join(','));
   });
   
-  // Create and download CSV
   const csvContent = csvRows.join('\n');
   const blob = new Blob([csvContent], { type: 'text/csv' });
   const url = window.URL.createObjectURL(blob);
@@ -126,20 +122,17 @@ const ImageCaptcha = ({ onSubmit, error, trial }) => {
   const [selected, setSelected] = useState(new Set());
   const [challenge, setChallenge] = useState(null);
 
-  // Challenge configurations
   const challenges = [
     { name: 'cars', label: 'cars', correctCount: 3, wrongCount: 6 },
     { name: 'crosswalk', label: 'crosswalks', correctCount: 2, wrongCount: 7 },
     { name: 'stairs', label: 'stairs', correctCount: 3, wrongCount: 6 }
   ];
 
-  // Initialize challenge on mount
   useEffect(() => {
     const challengeType = challenges[trial % challenges.length];
     const images = [];
     
     try {
-      // Load correct images
       for (let i = 1; i <= challengeType.correctCount; i++) {
         images.push({
           src: require(`./images/image/${challengeType.name}/right-${i}.png`),
@@ -148,7 +141,6 @@ const ImageCaptcha = ({ onSubmit, error, trial }) => {
         });
       }
       
-      // Load wrong images
       for (let i = 1; i <= challengeType.wrongCount; i++) {
         images.push({
           src: require(`./images/image/${challengeType.name}/wrong-${i}.png`),
@@ -157,7 +149,6 @@ const ImageCaptcha = ({ onSubmit, error, trial }) => {
         });
       }
       
-      // Shuffle images
       const shuffled = images.sort(() => Math.random() - 0.5);
       
       setChallenge({
@@ -182,11 +173,9 @@ const ImageCaptcha = ({ onSubmit, error, trial }) => {
   const handleVerify = () => {
     if (!challenge) return;
     
-    // Check if all selected images are correct
     const selectedImages = Array.from(selected).map(idx => challenge.images[idx]);
     const correctImages = challenge.images.filter(img => img.isCorrect);
     
-    // Must select exactly the correct images
     const allCorrectSelected = correctImages.every((img) => {
       const imageIndex = challenge.images.indexOf(img);
       return selected.has(imageIndex);
@@ -340,10 +329,11 @@ export default function CaptchaExperiment() {
   const [currentRound, setCurrentRound] = useState(0);
   const [currentTrial, setCurrentTrial] = useState(0);
   const [roundStartTime, setRoundStartTime] = useState(null);
+  const [trialStartTime, setTrialStartTime] = useState(null);
   const [error, setError] = useState(false);
-  const [results, setResults] = useState([]);
+  const [results, setResults] = useState([]); // one entry per trial
   const [currentCaptchaData, setCurrentCaptchaData] = useState(null);
-  const [attempts, setAttempts] = useState(0);
+  const [attempts, setAttempts] = useState(0); // errors within current trial
 
   const order = group ? GROUP_ORDERS[group] : [];
   const currentType = order[currentRound];
@@ -366,7 +356,9 @@ export default function CaptchaExperiment() {
     setStage('experiment');
     setCurrentRound(0);
     setCurrentTrial(0);
-    setRoundStartTime(Date.now());
+    const now = Date.now();
+    setRoundStartTime(now);
+    setTrialStartTime(now);
     setResults([]);
     setAttempts(0);
     
@@ -378,51 +370,53 @@ export default function CaptchaExperiment() {
     if (!isCorrect) {
       setError(true);
       setAttempts(prev => prev + 1);
-      
-      const updatedResults = [...results];
-      if (!updatedResults[currentRound]) {
-        updatedResults[currentRound] = { type: currentType, time: 0, attempts: 0 };
-      }
-      updatedResults[currentRound].attempts += 1;
-      setResults(updatedResults);
-      
       setTimeout(() => setError(false), 2000);
       return;
     }
 
     setError(false);
 
+    // compute this trial's time
+    const trialTime = customTime || (Date.now() - trialStartTime);
+
+    // store this trial's result
+    setResults(prev => [
+      ...prev,
+      {
+        type: currentType,
+        round: currentRound + 1,
+        trial: currentTrial + 1,
+        time: trialTime,
+        attempts
+      }
+    ]);
+
     if (currentTrial < 2) {
+      // move to next trial within same round
       setTimeout(() => {
         const nextTrial = currentTrial + 1;
         setCurrentTrial(nextTrial);
         setAttempts(0);
+        setTrialStartTime(Date.now());
         const nextData = generateCaptchaData(currentType, nextTrial);
         setCurrentCaptchaData(nextData);
       }, 500);
     } else {
-      const roundTime = customTime || (Date.now() - roundStartTime);
-      const updatedResults = [...results];
-      
-      if (!updatedResults[currentRound]) {
-        updatedResults[currentRound] = { type: currentType, time: roundTime, attempts };
-      } else {
-        updatedResults[currentRound].time = roundTime;
-      }
-      
-      setResults(updatedResults);
-
+      // finished third trial in this round
       if (currentRound < 2) {
         setTimeout(() => {
           const nextRound = currentRound + 1;
           setCurrentRound(nextRound);
           setCurrentTrial(0);
           setAttempts(0);
-          setRoundStartTime(Date.now());
+          const now = Date.now();
+          setRoundStartTime(now);
+          setTrialStartTime(now);
           const nextData = generateCaptchaData(order[nextRound], 0);
           setCurrentCaptchaData(nextData);
         }, 1000);
       } else {
+        // finished final trial of final round
         setTimeout(() => setStage('results'), 500);
       }
     }
@@ -436,6 +430,8 @@ export default function CaptchaExperiment() {
     setCurrentTrial(0);
     setResults([]);
     setAttempts(0);
+    setRoundStartTime(null);
+    setTrialStartTime(null);
   };
 
   if (stage === 'intro') {
@@ -503,8 +499,17 @@ export default function CaptchaExperiment() {
   }
 
   if (stage === 'results') {
-    const totalTime = results.reduce((sum, r) => sum + r.time, 0);
-    const totalAttempts = results.reduce((sum, r) => sum + (r.attempts || 0), 0);
+    // Aggregate back into "round" summary for display
+    const roundSummary = [1, 2, 3].map((r) => {
+      const trials = results.filter(res => res.round === r);
+      const type = trials[0]?.type || '';
+      const time = trials.reduce((sum, t) => sum + t.time, 0);
+      const attempts = trials.reduce((sum, t) => sum + t.attempts, 0);
+      return { round: r, type, time, attempts };
+    });
+
+    const totalTime = roundSummary.reduce((sum, r) => sum + r.time, 0);
+    const totalAttempts = roundSummary.reduce((sum, r) => sum + r.attempts, 0);
 
     return (
       <div className="min-h-screen bg-gradient-to-br from-green-50 to-emerald-100 p-8">
@@ -519,19 +524,21 @@ export default function CaptchaExperiment() {
             <div className="bg-blue-50 p-6 rounded-lg">
               <h2 className="text-xl font-semibold mb-4">Round Results</h2>
               <div className="space-y-4">
-                {results.map((result, idx) => (
+                {roundSummary.map((result, idx) => (
                   <div key={idx} className="bg-white p-4 rounded-lg shadow">
                     <div className="flex justify-between items-center mb-2">
-                      <h3 className="font-semibold text-lg">Round {idx + 1}: {result.type}</h3>
+                      <h3 className="font-semibold text-lg">
+                        Round {result.round}: {result.type}
+                      </h3>
                     </div>
                     <div className="grid grid-cols-2 gap-4 text-sm">
                       <div className="flex items-center gap-2">
                         <Clock className="w-4 h-4 text-blue-600" />
-                        <span>Time: {(result.time / 1000).toFixed(2)}s</span>
+                        <span>Time (3 trials): {(result.time / 1000).toFixed(2)}s</span>
                       </div>
                       <div className="flex items-center gap-2">
                         <XCircle className="w-4 h-4 text-red-600" />
-                        <span>Errors: {result.attempts || 0}</span>
+                        <span>Total Errors: {result.attempts}</span>
                       </div>
                     </div>
                   </div>
@@ -557,7 +564,7 @@ export default function CaptchaExperiment() {
             <div className="bg-green-50 border-2 border-green-300 rounded-lg p-6">
               <h2 className="text-xl font-semibold mb-3 text-green-800">📊 Export for GoStats Analysis</h2>
               <p className="text-sm text-gray-700 mb-4">
-                Download CSV file formatted for ANOVA analysis in GoStats
+                Download CSV file formatted with one row per trial for ANOVA / non-parametric tests.
               </p>
               <button
                 onClick={() => exportToCSV(participantId, group, results)}
@@ -566,7 +573,7 @@ export default function CaptchaExperiment() {
                 📥 Download CSV for GoStats
               </button>
               <p className="text-xs text-gray-500 mt-3">
-                Format: ParticipantID, Group, CAPTCHAType, Trial, SolveTime_sec, ErrorRate, Attempts
+                Format: ParticipantID, Group, CAPTCHAType, Round, Trial, SolveTime_sec, ErrorCount
               </p>
             </div>
 
@@ -582,6 +589,7 @@ export default function CaptchaExperiment() {
     );
   }
 
+  // Experiment stage
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-50 to-pink-100 p-8">
       <div className="max-w-2xl mx-auto">
@@ -594,7 +602,7 @@ export default function CaptchaExperiment() {
               <div className="flex items-center gap-2 text-gray-600 bg-gray-100 px-4 py-2 rounded-lg">
                 <Clock className="w-5 h-5" />
                 <span className="font-mono text-lg">
-                  {roundStartTime ? ((Date.now() - roundStartTime) / 1000).toFixed(1) : '0.0'}s
+                  {trialStartTime ? ((Date.now() - trialStartTime) / 1000).toFixed(1) : '0.0'}s
                 </span>
               </div>
             </div>

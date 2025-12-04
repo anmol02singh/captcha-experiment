@@ -13,16 +13,19 @@ const GROUP_ORDERS = {
 const TEXT_CAPTCHAS = [
   { id: 1, answer: '6T9JBCDS', imageUrl: textBased1 },
   { id: 2, answer: '831632', imageUrl: textBased2 },
-  { id: 3, answer: 'KM8CXKZ8t', imageUrl: textBased3 },
+  { id: 3, answer: 'JIC22U', imageUrl: textBased3 },
 ];
 
 const exportToCSV = (participantId, group, results) => {
   const csvRows = [];
   
-  // Header (long format: one row per trial)
-  csvRows.push('ParticipantID,Group,CAPTCHAType,Round,Trial,SolveTime_sec,ErrorCount');
+  // Header 
+  csvRows.push('ParticipantID,Group,CAPTCHAType,Round,Trial,SolveTime_sec,ErrorCount,Attempts,ErrorRate_percent');
   
   results.forEach((result) => {
+    const attempts = result.attempts + 1;
+    const errorRate = attempts > 0 ? ((result.attempts / attempts) * 100).toFixed(2) : '0.00';
+    
     const row = [
       participantId,
       group,
@@ -30,7 +33,9 @@ const exportToCSV = (participantId, group, results) => {
       result.round,       // 1–3
       result.trial,       // 1–3
       (result.time / 1000).toFixed(3),  // ms → s
-      result.attempts
+      result.attempts,    // Error count
+      attempts,           // Total attempts
+      errorRate           // Error rate as percentage
     ];
     csvRows.push(row.join(','));
   });
@@ -562,7 +567,7 @@ export default function CaptchaExperiment() {
 
             {/* GoStats Export Section */}
             <div className="bg-green-50 border-2 border-green-300 rounded-lg p-6">
-              <h2 className="text-xl font-semibold mb-3 text-green-800">📊 Export for GoStats Analysis</h2>
+              <h2 className="text-xl font-semibold mb-3 text-green-800">📊 Export for Analysis</h2>
               <p className="text-sm text-gray-700 mb-4">
                 Download CSV file formatted with one row per trial for ANOVA / non-parametric tests.
               </p>
@@ -570,10 +575,10 @@ export default function CaptchaExperiment() {
                 onClick={() => exportToCSV(participantId, group, results)}
                 className="w-full bg-green-600 text-white p-4 rounded-lg text-lg font-semibold hover:bg-green-700 transition flex items-center justify-center gap-2"
               >
-                📥 Download CSV for GoStats
+                📥 Download CSV
               </button>
               <p className="text-xs text-gray-500 mt-3">
-                Format: ParticipantID, Group, CAPTCHAType, Round, Trial, SolveTime_sec, ErrorCount
+                Format: ParticipantID, Group, CAPTCHAType, Round, Trial, SolveTime_sec, ErrorCount, Attempts, ErrorRate_percent
               </p>
             </div>
 
